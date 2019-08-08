@@ -95,7 +95,7 @@ struct kobj_type {
     			    const char *fmt, va_list vargs);
     ```
 
-    `kobject_add_varg`首先调用`kobject_set_name_vargs`来设置`kobj->name`属性。随后调用
+    `kobject_add_varg`首先调用`kobject_set_name_vargs`（这个函数内部创建的是堆内存哦！）来设置`kobj->name`属性。随后调用
 
     `kobject_add_internal`。
 
@@ -222,6 +222,218 @@ struct kobj_type {
     };
     ```
     
-    ``
     
     
+- `kobject_create_and_add`
+
+    ```c
+    struct kobject *kobject_create_and_add(const char *name, struct kobject *parent);
+    ```
+
+    create a struct kobject dynamically and register it with sysfs.
+
+- `kobject_get`
+
+    增加`kobject`的引用计数。
+
+    ```c
+    struct kobject *kobject_get(struct kobject *kobj)
+    {
+    	if (kobj)
+    		kref_get(&kobj->kref);
+    	return kobj;
+    }
+    ```
+
+- `kobject_put`
+
+    ```c
+    void kobject_put(struct kobject *kobj)
+    {
+    	if (kobj) {
+    		if (!kobj->state_initialized)
+    		kref_put(&kobj->kref, kobject_release);
+    	}
+    }
+    
+    static void kobject_release(struct kref *kref)
+    {
+    	kobject_cleanup(container_of(kref, struct kobject, kref));
+    }
+    
+    static void kobject_cleanup(struct kobject *kobj)
+    {
+    	struct kobj_type *t = get_ktype(kobj);
+    	const char *name = kobj->name;
+    
+    	pr_debug("kobject: '%s' (%p): %s\n",
+    		 kobject_name(kobj), kobj, __func__);
+    
+    	if (t && !t->release)
+    		pr_debug("kobject: '%s' (%p): does not have a release() "
+    			 "function, it is broken and must be fixed.\n",
+    			 kobject_name(kobj), kobj);
+    
+    	/* send "remove" if the caller did not do it but sent "add" */
+    	if (kobj->state_add_uevent_sent && !kobj->state_remove_uevent_sent) {
+    		pr_debug("kobject: '%s' (%p): auto cleanup 'remove' event\n",
+    			 kobject_name(kobj), kobj);
+    		kobject_uevent(kobj, KOBJ_REMOVE);
+    	}
+    
+    	/* remove from sysfs if the caller did not do it */
+    	if (kobj->state_in_sysfs) {
+    		pr_debug("kobject: '%s' (%p): auto cleanup kobject_del\n",
+    			 kobject_name(kobj), kobj);
+    		kobject_del(kobj);
+    	}
+    
+    	if (t && t->release) {
+    		pr_debug("kobject: '%s' (%p): calling ktype release\n",
+    			 kobject_name(kobj), kobj);
+    		t->release(kobj); //释放内存
+    	}
+    
+    	/* free name if we allocated it */
+    	if (name) { 
+            //kobject_set_name_vargs创建的是堆内存，需要手动释放
+    		pr_debug("kobject: '%s': free name\n", name);
+    		kfree(name);
+    	}
+    }
+    ```
+
+    当`kobj->kref`的值为0时，就会调用`kobject_release`，后者最终调用`kobject_cleanup`来完成清理工作。
+
+    
+
+    
+
+## 实例
+
+驱动安装后，会在`/sys/kernel`目录下生成`kobject_example`目录。目录下有`foo`、`baz`和`bar`三个文件。我们可以通过`cat`和`echo n > *`来操作相关文件。
+
+**源文件**
+
+```c
+#include <linux/kobject.h>
+#include <linux/string.h>
+#include <linux/sysfs.h>
+#include <linux/module.h>
+#include <linux/init.h>
+
+
+static int foo;
+static int baz;
+static int bar;
+
+/*
+ * The "foo" file where a static variable is read from and written to.
+ */
+static ssize_t foo_show(struct kobject *kobj, struct kobj_attribute *attr,
+			char *buf)
+{
+	return sprintf(buf, "%d\n", foo);
+}
+
+static ssize_t foo_store(struct kobject *kobj, struct kobj_attribute *attr,
+			 const char *buf, size_t count)
+{
+	sscanf(buf, "%du", &foo);
+	return count;
+}
+
+static struct kobj_attribute foo_attribute =
+	__ATTR(foo, 0666, foo_show, foo_store);
+
+static ssize_t b_show(struct kobject *kobj, struct kobj_attribute *attr,
+		      char *buf)
+{
+	int var;
+
+	if (strcmp(attr->attr.name, "baz") == 0)
+		var = baz;
+	else
+		var = bar;
+	return sprintf(buf, "%d\n", var);
+}
+
+static ssize_t b_store(struct kobject *kobj, struct kobj_attribute *attr,
+		       const char *buf, size_t count)
+{
+	int var;
+
+	sscanf(buf, "%du", &var);
+	if (strcmp(attr->attr.name, "baz") == 0)
+		baz = var;
+	else
+		bar = var;
+	return count;
+}
+
+static struct kobj_attribute baz_attribute =
+	__ATTR(baz, 0666, b_show, b_store);
+static struct kobj_attribute bar_attribute =
+	__ATTR(bar, 0666, b_show, b_store);
+
+static struct attribute *attrs[] = {
+	&foo_attribute.attr,
+	&baz_attribute.attr,
+	&bar_attribute.attr,
+	NULL,	/* need to NULL terminate the list of attributes */
+};
+
+
+static struct attribute_group attr_group = {
+	.attrs = attrs,
+};
+
+static struct kobject *example_kobj;
+
+static int __init example_init(void)
+{
+	int retval;
+
+	//指定其parent 为 kernel_kobj
+	example_kobj = kobject_create_and_add("kobject_example", kernel_kobj);
+	if (!example_kobj)
+		return -ENOMEM;
+
+	//创建和example_kobj相关的属性文件
+	retval = sysfs_create_group(example_kobj相关的属性文件, &attr_group);
+	if (retval)
+		kobject_put(example_kobj);
+
+	return retval;
+}
+
+static void __exit example_exit(void)
+{
+	kobject_put(example_kobj);
+}
+
+module_init(example_init);
+module_exit(example_exit);
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("Greg Kroah-Hartman <greg@kroah.com>");
+```
+
+**Makefile**
+
+```makefile
+ifneq ($(KERNELRELEASE),)
+	obj-m := kobject.o
+else
+KERNEL_DIR = ... #指定内核路径
+FLAGS = ARCH=arm CORSS_COMPILE=arm-eabi #指定编译平台，我这里是arm
+.PHONY:clean
+
+all: 
+	make -C $(KERNEL_DIR) M=$(PWD) $(FLAGS)  modules
+
+clean:
+	rm -rf *.mod.* *.o *.ko *.order *.builtin *.symvers .*.*.cmd .tmp_versions .proc.*
+endif
+
+```
+
