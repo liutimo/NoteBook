@@ -24,14 +24,6 @@ struct kobject {
 	unsigned int uevent_suppress:1;			//如果为1，忽略所有上报的uevent事件
 };
 
-
-struct kset {
-	struct list_head list;	//用于保存该kset下所有的kobject的链表
-	spinlock_t list_lock;	
-	struct kobject kobj;	//kset是一个特殊的kobject，在sysfs中以目录的形式体现
-	const struct kset_uevent_ops *uevent_ops;	//任何一个kobject上报uevent时，都要调用其所属kset的uevent操作函数集中的函数。
-};
-
 struct kobj_type {
 	void (*release)(struct kobject *kobj);	//用于释放该种kobject的内存空间。
 	const struct sysfs_ops *sysfs_ops;	//该种kobject的sysfs的文件系统接口
@@ -42,8 +34,6 @@ struct kobj_type {
 ```
 
 
-
-`kset`表示`kobject`s的集合，集合内的`kobject`都属于同一个subsystem。
 
 
 
@@ -231,6 +221,8 @@ struct kobj_type {
     ```
 
     create a struct kobject dynamically and register it with sysfs.
+
+    这里，我们可能不能指定`kobj->kset`。
 
 - `kobject_get`
 
