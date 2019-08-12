@@ -197,6 +197,7 @@ struct kset_uevent_ops {
     
     	mutex_unlock(&uevent_sock_mutex);
     	
+        //3.10版本中，uevent_helper为空，所以最终不会使用该种方式通知用户层
     	/* call uevent_helper, usually only enabled during early boot */
     	if (uevent_helper[0] && !kobj_usermode_filter(kobj)) {
     		char *argv [3];
