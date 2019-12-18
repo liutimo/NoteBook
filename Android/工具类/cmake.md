@@ -8,9 +8,7 @@ CMake是一款开源的、跨平台的工具，用于build、test 以及 打包�
 
 1. 编写CMakeLists.txt
 
-2. cmake  PATH
-
-    PATH 就是CMakeLists.txt所在的路径。
+2. cmake  CMakeLists.txt
 
 3. make && make install 
 
@@ -26,7 +24,7 @@ make && make install
 
 # CMake 语法
 
-CMake支持变量定义以及流程控制。下面就逐一介绍。
+CMake支持变量定义以及流程控制。
 
 ## 变量
 
@@ -189,7 +187,7 @@ eg:
 
 此外，CMake还有很多命令，这里就不一一介绍，实际使用时，参考官方文档。
 
-## 控制
+## 流程控制
 
 1. 条件
 
@@ -212,15 +210,15 @@ eg:
     endif(expression)
     ```
     
-    | expression             | 意义                                                         |
-    | ---------------------- | ------------------------------------------------------------ |
-    | variable               | 当if命令参数的值不是：0、FALSE、OFF、NO、NOTFOUND、*-NOTFOUND、IGNORE时，表达式的值为真，注意不区分大小写variable可以不用${}包围 |
-    | not  variable          | 上面取反.variable可以不用${}包围                             |
-    | variable1 andvariable2 | 逻辑与，所有逻辑操作支持用括号来提升优先级。 类似地，也有逻辑或 or |
-    | num1 queal num2        | 数字相等比较，其它操作符包括less、greater                    |
-    | str1 strequal str2     | 字典序相等比较，其它操作符包括strless、strgreater            |
-    | exists file-name       | 如果指定的文件或者目录存在                                   |
-    | ...                    | 还有好多，参考官方文档。                                     |
+    | expression              | 意义                                                         |
+    | ----------------------- | ------------------------------------------------------------ |
+    | variable                | 当if命令参数的值不是：0、FALSE、OFF、NO、NOTFOUND、*-NOTFOUND、IGNORE时，表达式的值为真，注意不区分大小写variable可以不用${}包围 |
+    | not  variable           | 上面取反.variable可以不用${}包围                             |
+    | variable1 and variable2 | 逻辑与，所有逻辑操作支持用括号来提升优先级。 类似地，也有逻辑或 or |
+    | num1 queal num2         | 数字相等比较，其它操作符包括less、greater                    |
+    | str1 strequal str2      | 字典序相等比较，其它操作符包括strless、strgreater            |
+    | exists file-name        | 如果指定的文件或者目录存在                                   |
+    | ...                     | 还有好多，参考官方文档。                                     |
     
     
     
@@ -366,11 +364,77 @@ target_link_libraries(JniLib usb1.0 log ssl crypto)  #link指定的库文件。
 
 ## 静态库
 
-1. 在x86_64架构上：这种方式是可以编译并运行成功的。
+1. `link_directories` 静态库所在路径后，再在`target_link_libraries`中直接引用需要的静态库。
 
     ![1576485949247](images/1576485949247.png)
 
 
-2. 在arm架构上。上面的CMakeLists.txt
+2. 使用`add_library`和`set_target_properties`来添加静态库
 
+    ```cmake
+    cmake_minimum_required(VERSION 3.4.1)
+    
+    include_directories(./include)
+    
+    
+    
+    add_library(
+                 native-lib
+    
+                 SHARED
+    
+                 native-lib.cpp )
+    
+    
+    #添加自己所需的静态库 库多的话，可以使用下面的方式添加
+    add_library(calc    #库名字 去掉了 lib 与 .a
+            STATIC   #必须的
+            IMPORTED #必须的
+            )
+    set_target_properties(
+            calc
+            PROPERTIES IMPORTED_LOCATION
+            ${CMAKE_CURRENT_SOURCE_DIR}/libs/libcalc.a #库在的路径，以cmakeList.txt所在的路径起
+    )
+    
+    find_library(
+                  log-lib
+                  log )
+    target_link_libraries( 
+                           native-lib
+                           ${log-lib}
+                            calc
+            )
+    ```
 
+    `set_target_properties`中指定静态库路径时，使用相对路径会导致导入失败，原因呢，不清楚。所以，最好使用绝对路径。
+
+## Android Studio使用 CMake来管理Native代码
+
+在建立好项目目录结构后，在项目路径下创建并编辑好CMakeLists.txt文件。
+
+在模块的build.gradle文件中添加如下代码:
+
+```shell
+android {
+	...
+	defaultConfig {
+		...
+        externalNativeBuild {
+        	cmake {
+                abiFilters 'armeabi-v7a','arm64-v8a'	  #[2]
+             }
+         }	
+	}
+	...
+	externalNativeBuild {
+        cmake {
+        	path file('CMakeLists.txt')    			 #[1] 
+        }
+    }
+}
+```
+
+[1] 指定CMakeLists.txt的路径。这样，NDK可自动编译Native代码并生成库文件。同时可以对Native代码提供高亮以及跳转支持。
+
+[2] 指定需要生成那几个平台的库文件。 默认情况下，cmake 会输出 4 种 ABI（"armeabi-v7a" , "arm64-v8a", "x86", "x86_64"）。根据项目需要，最小化abiFilters字段，可以缩短编译时间并且减少apk的文件大小。
