@@ -1,5 +1,136 @@
 
 
+# 通信协议
+
+
+## binder_driver_command_protocol
+
+Binder请求码，由用户层程序向Binder驱动发送。以**`BC_`**开头。
+
+| 命令码                               | 参数类型                         | 作用                        |
+| ------------------------------------ | -------------------------------- | --------------------------- |
+| `BC_TRANSACTION`                     | `struct binder_transaction_data` | Client向binder驱动发送数据  |
+| `BC_REPLY`                           | `struct binder_transaction_data` | Server向binder驱动发送数据  |
+| `BC_FREE_BUFFER`                     | `binder_uintptr_t`               | 释放内存                    |
+| `BC_INCREFS`、`BC_ACQUIRE0`          | `int`                            | `binder_ref`弱引用计数操作  |
+| `BC_RELEASE`、`BC_DECREFS`           | `int`                            | `binder_ref`强引用计数操作  |
+| `BC_INCREFS_DONE`、`BC_ACQUIRE_DONE` | `binder_ptr_cookie`              | `binder_node`强引用计数操作 |
+| `BC_REGISTER_LOOPER`                 | \                                | 创建新的looper线程          |
+| `BC_ENTER_LOOPER`                    | \                                | 应用线程进入looper          |
+| `BC_EXIT_LOOPER`                     | \                                | 应用线程退出looper          |
+|                                      |                                  |                             |
+|                                      |                                  |                             |
+|                                      |                                  |                             |
+
+ 
+
+1. `BC_TRANSACTION`
+
+    查看binder驱动，发现其仅在`binder_thread_write`函数中被使用。因此该命令码应该是由用户空间程序传输数据到内核空间时使用。
+
+    ```c++
+    case BC_REPLY:
+    case BC_TRANSACTION: {
+    	struct binder_transaction_data tr;
+    	if (copy_from_user(&tr, ptr, sizeof(tr)))
+    		return -EFAULT;
+    	ptr += sizeof(tr);
+    	binder_transaction(proc, thread, &tr, cmd == BC_REPLY, 0);
+    	break;
+    }
+    ```
+
+    
+
+
+
+## binder_driver_return_protocol
+
+Binder响应码，由Binder驱动返回给用户层程序。用户层程序包括Client端和Server端。命令码以**`BR_`**开头
+
+```c++
+enum binder_driver_return_protocol {
+	BR_ERROR = _IOR('r', 0, __s32),
+	/*
+	 * int: error code
+	 */
+
+	BR_OK = _IO('r', 1),
+	/* No parameters! */
+
+	BR_TRANSACTION = _IOR('r', 2, struct binder_transaction_data),
+	BR_REPLY = _IOR('r', 3, struct binder_transaction_data),
+	/*
+	 * binder_transaction_data: the received command.
+	 */
+
+	BR_DEAD_REPLY = _IO('r', 5),
+	/*
+	 * The target of the last transaction (either a bcTRANSACTION or
+	 * a bcATTEMPT_ACQUIRE) is no longer with us.  No parameters.
+	 */
+
+	BR_TRANSACTION_COMPLETE = _IO('r', 6),
+	/*
+	 * No parameters... always refers to the last transaction requested
+	 * (including replies).  Note that this will be sent even for
+	 * asynchronous transactions.
+	 */
+
+	BR_INCREFS = _IOR('r', 7, struct binder_ptr_cookie),
+	BR_ACQUIRE = _IOR('r', 8, struct binder_ptr_cookie),
+	BR_RELEASE = _IOR('r', 9, struct binder_ptr_cookie),
+	BR_DECREFS = _IOR('r', 10, struct binder_ptr_cookie),
+	/*
+	 * void *:	ptr to binder
+	 * void *: cookie for binder
+	 */
+
+	BR_ATTEMPT_ACQUIRE = _IOR('r', 11, struct binder_pri_ptr_cookie),
+	/*
+	 * not currently supported
+	 * int:	priority
+	 * void *: ptr to binder
+	 * void *: cookie for binder
+	 */
+
+	BR_NOOP = _IO('r', 12),
+	/*
+	 * No parameters.  Do nothing and examine the next command.  It exists
+	 * primarily so that we can replace it with a BR_SPAWN_LOOPER command.
+	 */
+
+	BR_SPAWN_LOOPER = _IO('r', 13),
+	/*
+	 * No parameters.  The driver has determined that a process has no
+	 * threads waiting to service incoming transactions.  When a process
+	 * receives this command, it must spawn a new service thread and
+	 * register it via bcENTER_LOOPER.
+	 */
+
+	BR_DEAD_BINDER = _IOR('r', 15, binder_uintptr_t),
+	/*
+	 * void *: cookie
+	 */
+	BR_CLEAR_DEATH_NOTIFICATION_DONE = _IOR('r', 16, binder_uintptr_t),
+	/*
+	 * void *: cookie
+	 */
+
+	BR_FAILED_REPLY = _IO('r', 17),
+	/*
+	 * The the last transaction (either a bcTRANSACTION or
+	 * a bcATTEMPT_ACQUIRE) failed (e.g. out of memory).  No parameters.
+	 */
+};
+```
+
+
+
+
+
+# 
+
 
 
 # 核心数据结构
@@ -242,6 +373,104 @@ binder_uintptr_t cookie;	//userspace cookie for node
 
 
 
+## binder_transaction_data
+
+
+
+
+
+```c++
+struct binder_transaction_data {
+	/* The first two are only used for bcTRANSACTION and brTRANSACTION,
+	 * identifying the target and contents of the transaction.
+	 */
+	union {
+		/* target descriptor of command transaction */
+		__u32	handle;
+		/* target descriptor of return transaction */
+		binder_uintptr_t ptr;
+	} target;
+	binder_uintptr_t	cookie;	/* target object cookie */
+	__u32		code;		/* transaction command */
+
+	/* General information about the transaction. */
+	__u32	        flags;
+	pid_t		sender_pid;
+	uid_t		sender_euid;
+	binder_size_t	data_size;	/* number of bytes of data */
+	binder_size_t	offsets_size;	/* number of bytes of offsets */
+
+	/* If this transaction is inline, the data immediately
+	 * follows here; otherwise, it ends with a pointer to
+	 * the data buffer.
+	 */
+	union {
+		struct {
+			/* transaction data */
+			binder_uintptr_t	buffer;
+			/* offsets from buffer to flat_binder_object structs */
+			binder_uintptr_t	offsets;
+		} ptr;
+		__u8	buf[8];
+	} data;
+};
+
+```
+
+1. `binder_transaction_data.target` 和 `binder_transaction_data.cookie`
+
+    仅在命令码为`BR_TRANSACTION`和`BC_TRANSACTION`时使用，用于标志接受数据的target和传输的数据内容(cookie)。
+
+    `target.handle`BC命令码的target，`target.ptr`表示BR命令码的target。
+
+2. `code`: 指示传输的数据类型，由应用层来决定，应用层根据code来解析命令。以Service Manager为例。
+
+    ```c++
+    struct binder_transaction_data *txn = ...;
+    switch(txn->code) {
+        case SVC_MGR_GET_SERVICE:
+        case SVC_MGR_CHECK_SERVICE:
+           ...
+            return 0;
+    
+        case SVC_MGR_ADD_SERVICE:
+           ...
+            break;
+    
+        case SVC_MGR_LIST_SERVICES: {
+           ...
+        }
+    }
+    ```
+
+3. `data_size` 和 `offests_size`
+
+    结合`IPCThreadState::writeTransactionData`可知：
+
+    `data_size` 表示的是一个`Parcel`持有的数据的大小。
+
+    `offsets_size`表示的是 传输的binder对象的总大小。
+
+    ```c++
+    tr.data_size = data.ipcDataSize();
+    tr.offsets_size = data.ipcObjectsCount()*sizeof(binder_size_t);
+    ```
+
+4. `data`
+
+    结合`IPCThreadState::writeTransactionData`可知：
+
+    `data.ptr.buffer` 表示传输数据的起始地址。
+
+    `ata.ptr.offsets`表示传输的bindre对象的在buffer中的偏移地址。
+
+    ```c++
+    tr.data.ptr.buffer = data.ipcData();
+    tr.data.ptr.offsets = data.ipcObjects();
+    ```
+
+    ![image005](images/15213416_sMTO.png)
+    ![image006](images/15213416_Bt05.png)
 
 
 # file_operations

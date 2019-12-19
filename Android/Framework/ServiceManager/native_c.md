@@ -1,3 +1,212 @@
+# main函数
+
+`frameworks/native/cmds/servicemanager/service_manager.c`
+
+```c++
+
+int main()
+{
+    struct binder_state *bs;
+	
+    //打开binder驱动，并map  128K的kernel memory
+    bs = binder_open(128*1024);
+    if (!bs) {
+        ALOGE("failed to open binder driver\n");
+        return -1;
+    }
+
+    //成为整个系统中唯一的上下文管理器，其实也就是service管理器
+    if (binder_become_context_manager(bs)) {	//[1]
+        ALOGE("cannot become context manager (%s)\n", strerror(errno));
+        return -1;
+    }
+
+    //去除selinux相关代码
+
+    //进入循环
+    binder_loop(bs, svcmgr_handler);		//[2]
+
+    return 0;
+}
+
+```
+
+
+
+main函数的主要工作由`binder_loop`完成。
+
+`[1]`将进程设置为整个系统中唯一的**context manager**。为什么这么做，等分析到`IServiceManager`时应该就会清晰了。
+
+`[2]`，进程的主循环了，其内部通过`ioctl(BINDER_WRITE_READ)`不断地来获取待处理数据，并将数据写回binder驱动(有必要的话)。
+
+
+
+`frameworks/native/cmds/servicemanager/binder.c`
+
+```c++
+void binder_loop(struct binder_state *bs, binder_handler func)
+{
+    int res;
+    struct binder_write_read bwr;
+    uint32_t readbuf[32];   //128字节
+
+    bwr.write_size = 0;
+    bwr.write_consumed = 0;
+    bwr.write_buffer = 0;
+
+	//[1]
+    readbuf[0] = BC_ENTER_LOOPER;
+    binder_write(bs, readbuf, sizeof(uint32_t));
+
+    for (;;) {
+        bwr.read_size = sizeof(readbuf);
+        bwr.read_consumed = 0;
+        bwr.read_buffer = (uintptr_t) readbuf;
+
+        //[2]
+        res = ioctl(bs->fd, BINDER_WRITE_READ, &bwr);
+
+        if (res < 0) {
+            ALOGE("binder_loop: ioctl failed (%s)\n", strerror(errno));
+            break;
+        }
+
+        //[3]
+        res = binder_parse(bs, 0, (uintptr_t) readbuf, bwr.read_consumed, func);
+        if (res == 0) {
+            ALOGE("binder_loop: unexpected reply?!\n");
+            break;
+        }
+        if (res < 0) {
+            ALOGE("binder_loop: io error %d %s\n", res, strerror(errno));
+            break;
+        }
+    }
+}
+```
+
+`[1]` 向驱动写入`BC_ENTER_LOOPER`命令码，告知binder，线程进入loop模式。binder驱动内部维护了一个
+
+​		 looping thread 的计数。通过`BC_ENTER_LOOPER` 和 `BC_EXIT_LOOPER`来增减。
+
+`[2]` 通过`BINDER_WRITE_READ`来完成和binder驱动的数据交换，`bwr.write_buffer == NULL`,因此不需要写入		 数据到binder驱动。
+
+`[3]` 调用`binder_parse`来解析数据，并使用`func == svcmgr_handler`来处理解析完成后的数据。
+
+
+
+`frameworks/native/cmds/servicemanager/binder.c`
+
+```c++
+int binder_parse(struct binder_state *bs, struct binder_io *bio,
+                 uintptr_t ptr, size_t size, binder_handler func)
+{
+    int r = 1;
+    uintptr_t end = ptr + (uintptr_t) size;
+
+    while (ptr < end) {
+        uint32_t cmd = *(uint32_t *) ptr;
+        ptr += sizeof(uint32_t);
+        switch(cmd) {
+        case BR_NOOP:
+            break;
+        case BR_TRANSACTION_COMPLETE:
+            break;
+        case BR_INCREFS:
+        case BR_ACQUIRE:
+        case BR_RELEASE:
+        case BR_DECREFS:
+            ptr += sizeof(struct binder_ptr_cookie);
+            break;
+        case BR_TRANSACTION: {
+            struct binder_transaction_data *txn = (struct binder_transaction_data *) ptr;
+            if ((end - ptr) < sizeof(*txn)) {
+                ALOGE("parse: txn too small!\n");
+                return -1;
+            }
+            binder_dump_txn(txn);
+            if (func) {
+                unsigned rdata[256/4];
+                struct binder_io msg;
+                struct binder_io reply;
+                int res;
+
+                bio_init(&reply, rdata, sizeof(rdata), 4);
+                bio_init_from_txn(&msg, txn);
+                res = func(bs, txn, &msg, &reply);
+                if (txn->flags & TF_ONE_WAY) {
+                    binder_free_buffer(bs, txn->data.ptr.buffer);
+                } else {
+                    binder_send_reply(bs, &reply, txn->data.ptr.buffer, res);
+                }
+            }
+            ptr += sizeof(*txn);
+            break;
+        }
+        case BR_REPLY: {
+            struct binder_transaction_data *txn = (struct binder_transaction_data *) ptr;
+            if ((end - ptr) < sizeof(*txn)) {
+                ALOGE("parse: reply too small!\n");
+                return -1;
+            }
+            binder_dump_txn(txn);
+            if (bio) {
+                bio_init_from_txn(bio, txn);
+                bio = 0;
+            } else {
+                /* todo FREE BUFFER */
+            }
+            ptr += sizeof(*txn);
+            r = 0;
+            break;
+        }
+        case BR_DEAD_BINDER: {
+            struct binder_death *death = (struct binder_death *)(uintptr_t) *(binder_uintptr_t *)ptr;
+            ptr += sizeof(binder_uintptr_t);
+            death->func(bs, death->ptr);
+            break;
+        }
+        case BR_FAILED_REPLY:
+            r = -1;
+            break;
+        case BR_DEAD_REPLY:
+            r = -1;
+            break;
+        }
+    }
+
+    return r;
+}
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 `BINDER_LOOPER_STATE_ENTERED` 和 `BC_REGISTER_LOOPER` 的区别：
 
 ```c++
@@ -44,36 +253,7 @@ case BC_REGISTER_LOOPER:
 
 直接看native层的实现：
 
-`frameworks/native/cmds/servicemanager/service_manager.c`
 
-```c++
-
-int main()
-{
-    struct binder_state *bs;
-	
-    //打开binder驱动，并map  128K的kernel memory
-    bs = binder_open(128*1024);
-    if (!bs) {
-        ALOGE("failed to open binder driver\n");
-        return -1;
-    }
-
-    //成为整个系统中唯一的上下文管理器，其实也就是service管理器
-    if (binder_become_context_manager(bs)) {
-        ALOGE("cannot become context manager (%s)\n", strerror(errno));
-        return -1;
-    }
-
-    //去除selinux相关代码
-
-    //进入循环
-    binder_loop(bs, svcmgr_handler);
-
-    return 0;
-}
-
-```
 
 
 
