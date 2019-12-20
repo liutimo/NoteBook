@@ -247,6 +247,8 @@ struct binder_thread {
 
 ## binder_node
 
+表示一个binder对象实体。
+
 ```c++
 struct binder_node {
 	int debug_id;
@@ -471,6 +473,90 @@ struct binder_transaction_data {
 
     ![image005](images/15213416_sMTO.png)
     ![image006](images/15213416_Bt05.png)
+
+
+
+
+
+
+
+## binder_work
+
+There are separate work lists for proc, thread, and node (async).
+
+对于进程、线程以及binder_node（binder对象实体）都有单独的work list。
+
+```c++
+struct binder_work {
+	struct list_head entry;  //[1]
+
+	enum {
+		BINDER_WORK_TRANSACTION = 1,
+		BINDER_WORK_TRANSACTION_COMPLETE,
+		BINDER_WORK_RETURN_ERROR,
+		BINDER_WORK_NODE,
+		BINDER_WORK_DEAD_BINDER,
+		BINDER_WORK_DEAD_BINDER_AND_CLEAR,
+		BINDER_WORK_CLEAR_DEATH_NOTIFICATION,
+	} type;  //[2]
+};
+```
+
+`[1]` 用于嵌入宿主的todo链表中。`binder_proc.todo`、`binder_thread.todo`以及`binder_node.async_todo`
+
+`[2]`work的类型。
+
+
+
+## binder_transaction
+
+
+
+```c++
+struct binder_transaction {
+	int debug_id;
+    
+    //标志work type
+	struct binder_work work;
+    
+    //发送进程
+	struct binder_thread *from;
+    //接收进程
+	struct binder_thread *to_thread; 
+    //接收线程
+	struct binder_proc *to_proc;
+    
+	struct binder_transaction *from_parent;
+	struct binder_transaction *to_parent;
+    //是否需要回复
+	unsigned need_reply:1;
+	/* unsigned is_dead:1; */	/* not used at the moment */
+
+	struct binder_buffer *buffer;
+    //binder_transaction_data.code 
+	unsigned int	code;
+    //binder_transaction_data.code 
+	unsigned int	flags;
+	struct binder_priority	priority;
+	struct binder_priority	saved_priority;
+	bool    set_priority_called;
+    //发送端有效用户ID
+	kuid_t	sender_euid;	
+	/**
+	 * @lock:  protects @from, @to_proc, and @to_thread
+	 *
+	 * @from, @to_proc, and @to_thread can be set to NULL
+	 * during thread teardown
+	 */
+	spinlock_t lock;
+};
+```
+
+
+
+
+
+
 
 
 # file_operations

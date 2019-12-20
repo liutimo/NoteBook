@@ -115,3 +115,7 @@ protected:
 private:
 };		
 ```
+
+
+
+就是定义了一些接口咯，没什么好说的，主要看`BpBinder`和`BBinder`的实现。

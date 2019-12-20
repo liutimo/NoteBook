@@ -1,4 +1,4 @@
-# main函数
+# service_manager进程
 
 `frameworks/native/cmds/servicemanager/service_manager.c`
 
@@ -108,16 +108,6 @@ int binder_parse(struct binder_state *bs, struct binder_io *bio,
         uint32_t cmd = *(uint32_t *) ptr;
         ptr += sizeof(uint32_t);
         switch(cmd) {
-        case BR_NOOP:
-            break;
-        case BR_TRANSACTION_COMPLETE:
-            break;
-        case BR_INCREFS:
-        case BR_ACQUIRE:
-        case BR_RELEASE:
-        case BR_DECREFS:
-            ptr += sizeof(struct binder_ptr_cookie);
-            break;
         case BR_TRANSACTION: {
             struct binder_transaction_data *txn = (struct binder_transaction_data *) ptr;
             if ((end - ptr) < sizeof(*txn)) {
@@ -130,9 +120,9 @@ int binder_parse(struct binder_state *bs, struct binder_io *bio,
                 struct binder_io msg;
                 struct binder_io reply;
                 int res;
-
                 bio_init(&reply, rdata, sizeof(rdata), 4);
                 bio_init_from_txn(&msg, txn);
+                //调用svcmgr_handler解析数据
                 res = func(bs, txn, &msg, &reply);
                 if (txn->flags & TF_ONE_WAY) {
                     binder_free_buffer(bs, txn->data.ptr.buffer);
@@ -141,36 +131,6 @@ int binder_parse(struct binder_state *bs, struct binder_io *bio,
                 }
             }
             ptr += sizeof(*txn);
-            break;
-        }
-        case BR_REPLY: {
-            struct binder_transaction_data *txn = (struct binder_transaction_data *) ptr;
-            if ((end - ptr) < sizeof(*txn)) {
-                ALOGE("parse: reply too small!\n");
-                return -1;
-            }
-            binder_dump_txn(txn);
-            if (bio) {
-                bio_init_from_txn(bio, txn);
-                bio = 0;
-            } else {
-                /* todo FREE BUFFER */
-            }
-            ptr += sizeof(*txn);
-            r = 0;
-            break;
-        }
-        case BR_DEAD_BINDER: {
-            struct binder_death *death = (struct binder_death *)(uintptr_t) *(binder_uintptr_t *)ptr;
-            ptr += sizeof(binder_uintptr_t);
-            death->func(bs, death->ptr);
-            break;
-        }
-        case BR_FAILED_REPLY:
-            r = -1;
-            break;
-        case BR_DEAD_REPLY:
-            r = -1;
             break;
         }
     }
@@ -183,6 +143,79 @@ int binder_parse(struct binder_state *bs, struct binder_io *bio,
 
 
 
+至此，ServiceManager进程的主要工作已经很清晰了，其启动后就是处理binder驱动过来的数据。
+
+其主要工作内容如下:
+
+```c+=
+enum {
+    /* Must match definitions in IBinder.h and IServiceManager.h */
+    PING_TRANSACTION  = B_PACK_CHARS('_','P','N','G'),
+    SVC_MGR_GET_SERVICE = 1,
+    SVC_MGR_CHECK_SERVICE,
+    SVC_MGR_ADD_SERVICE,
+    SVC_MGR_LIST_SERVICES,
+};
+```
+
+
+
+这里暂不分析其实如何管理其他服务的。
+
+如果我们需要通过ServiceManager获取服务，应该怎么做？
+
+
+
+# IServiceManager
+
+> 需要了解IBinder BBinder BpBinder ProcessState IPCThreadState等类的原理。
+
+
+
+如果我们需要从ServiceManager中拿到我们需要的服务，就需要通过ServiceManager的代理类来获取。在Native层，其代理类实现在如下：
+
+`frameworks/native/libs/binder/IServiceManager.cpp`
+
+```c++
+class IServiceManager : public IInterface
+{
+public:
+    DECLARE_META_INTERFACE(ServiceManager);
+
+    /**
+     * Retrieve an existing service, blocking for a few seconds
+     * if it doesn't yet exist.
+     */
+    virtual sp<IBinder>         getService( const String16& name) const = 0;
+
+    /**
+     * Retrieve an existing service, non-blocking.
+     */
+    virtual sp<IBinder>         checkService( const String16& name) const = 0;
+
+    /**
+     * Register a service.
+     */
+    virtual status_t            addService( const String16& name,
+                                            const sp<IBinder>& service,
+                                            bool allowIsolated = false) = 0;
+
+    /**
+     * Return list of all existing services.
+     */
+    virtual Vector<String16>    listServices() = 0;
+
+    enum {
+        GET_SERVICE_TRANSACTION = IBinder::FIRST_CALL_TRANSACTION,
+        CHECK_SERVICE_TRANSACTION,
+        ADD_SERVICE_TRANSACTION,
+        LIST_SERVICES_TRANSACTION,
+    };
+};
+
+sp<IServiceManager> defaultServiceManager();
+
+```
 
 
 
@@ -190,10 +223,57 @@ int binder_parse(struct binder_state *bs, struct binder_io *bio,
 
 
 
+## defaultServiceManager
+
+该函数用于获取到ServiceManager实例。看看他是怎么拿到serviec_manager进程在binder驱动中的代表的。
+
+```c++
+//其实现可精简为
+return interface_cast<IServiceManager>(ProcessState::self()->getContextObject(NULL));
+
+//结合ProcessState可进一步简化为
+return interface_cast<IServiceManager>(new BpBinder(0));
+```
+
+`interface_cast`将一个`BpBinder`指针转换成`sp<IServiceManager>`，他是怎么做到的？
+
+```c++
+template<typename INTERFACE>
+inline sp<INTERFACE> interface_cast(const sp<IBinder>& obj)
+{
+    return INTERFACE::asInterface(obj);
+}
+```
+
+Oops，最终通过`IServiceManager::asInterface`将`BpBinder`指针转换成`sp<IServiceManager>`。
+
+```c++
+   android::sp<IServiceManager> IServiceManager::asInterface(                
+            const android::sp<android::IBinder>& obj)                   
+    {                                                                   
+        android::sp<IServiceManager> intr;                                 
+        if (obj != NULL) {           
+            //又回到了BpBinder->queryLocalInterface,返回值恒为NULL
+            intr = static_cast<IServiceManager*>(                          
+                obj->queryLocalInterface(                               
+                        IServiceManager::descriptor).get());               
+            if (intr == NULL) {                                         
+                intr = new BpServiceManager(obj);                          
+            }                                                           
+        }                                                               
+        return intr;                                                    
+    }          
+```
+
+
+
+so，最终会创建一个`BpServiceManager`对象
 
 
 
 
+
+##  BpInterface
 
 
 
