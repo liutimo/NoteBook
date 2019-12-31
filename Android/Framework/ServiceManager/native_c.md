@@ -273,14 +273,6 @@ so，最终会创建一个`BpServiceManager`对象
 
 
 
-##  BpInterface
-
-
-
-
-
-
-
 
 
 
