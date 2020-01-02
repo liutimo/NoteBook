@@ -1,8 +1,4 @@
-# StateMachine
-
-
-
-## State
+# State
 
 `enter`和`exit`类似于构造函数和析构函数，分别用于初始化和清理状态。
 
@@ -103,5 +99,90 @@ public class State implements IState {
 
     
 
+关于状态机的使用，可以查看`rameworks/base/core/java/com/android/internal/util/StateMachine.java`中关于`StateMachine`的注释。
 
+
+
+> 其实，StateMachine中大多数函数都是对`SmHandler`中的同名函数的包装。
+
+
+
+
+
+
+
+
+
+# SmHandler
+
+
+
+继承至`Handler`，实现了
+
+
+
+
+
+## 重要函数源码
+
+### addState
+
+```java
+private final StateInfo addState(State state, State parent) {
+    StateInfo parentStateInfo = null;
+    if (parent != null) {
+        //private HashMap<State, StateInfo> mStateInfo = new HashMap<State, StateInfo>();
+        parentStateInfo = mStateInfo.get(parent);
+        if (parentStateInfo == null) {												//[1]
+            // Recursively add our parent as it's not been added yet.
+            parentStateInfo = addState(parent, null);
+        }
+    }
+    StateInfo stateInfo = mStateInfo.get(state);
+    if (stateInfo == null) {					//[2]
+        stateInfo = new StateInfo();
+        mStateInfo.put(state, stateInfo);
+    }
+
+    // Validate that we aren't adding the same state in two different hierarchies.
+    if ((stateInfo.parentStateInfo != null)
+            && (stateInfo.parentStateInfo != parentStateInfo)) {
+        throw new RuntimeException("state already added");
+    }
+    stateInfo.state = state;
+    stateInfo.parentStateInfo = parentStateInfo;
+    stateInfo.active = false;
+    return stateInfo;
+}
+
+```
+
+- [1] 判断父状态是否在`mStateInfo`如果中，如果父状态不在，就递归地将没有在`mStateInfo`中的状态添加进来。
+
+- [2] 将状态添加到`mStateInfo`中，并创建一个`StateInfo`对象。
+
+    ```java
+    private class StateInfo 
+                State state;
+    
+                StateInfo parentStateInfo;
+    
+                boolean active;
+    }
+    ```
+
+    通过`StateInfo`，将状态机中的状态构建成一个树结构。
+
+
+
+
+
+### setInitialState
+
+```java
+       /** @see StateMachine#setInitialState(State) */
+private final void setInitialState(State initialState) {
+	mInitialState = initialState;
+}
+```
 
