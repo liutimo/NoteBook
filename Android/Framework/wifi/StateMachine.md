@@ -163,14 +163,12 @@ private final StateInfo addState(State state, State parent) {
 
     ```java
     private class StateInfo 
-                State state;
-    
-                StateInfo parentStateInfo;
-    
-                boolean active;
+    	State state;
+    	StateInfo parentStateInfo;
+    	boolean active;
     }
     ```
-
+    
     通过`StateInfo`，将状态机中的状态构建成一个树结构。
 
 

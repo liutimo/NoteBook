@@ -141,3 +141,28 @@ Message next() {
 //next返回null，回到Looper.loop()。oh,原来如此。
 ```
 
+
+
+
+
+# HandlerThread
+
+如前面所说，使用Thread内部使用`Handler`需要调用`Looper.prepare()`和`Looper.loop()`。而`HandlerThread`则将这部分操作进行了封装。
+
+```java
+public void run() {
+    mTid = Process.myTid();
+    Looper.prepare();
+    synchronized (this) {
+        mLooper = Looper.myLooper();
+        notifyAll(); //调用getLooper时需要保证线程已经执行到了这一步
+    }
+    Process.setThreadPriority(mPriority);
+    onLooperPrepared();
+    Looper.loop();
+    mTid = -1;
+}
+```
+
+其实现很简单，就不多说明了。
+
