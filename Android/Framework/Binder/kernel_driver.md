@@ -619,6 +619,42 @@ static int binder_release(struct inode *nodp, struct file *filp)
 
 ## `binder_mmap`
 
+### 条件判断
+1. 判断当前线程是不是主线程。
+
+    ```c++
+    if (proc->tsk != current->group_leader)
+    	return -EINVAL;
+    ```
+
+    
+
+2. 判断映射的内存空间大小是否操作4M
+
+    ```c++
+    if ((vma->vm_end - vma->vm_start) > SZ_4M)
+    	vma->vm_end = vma->vm_start + SZ_4M;
+    ```
+
+    
+
+3. 禁止直接向映射的内存空间写入数据
+
+    ```c++
+    #define FORBIDDEN_MMAP_FLAGS                (VM_WRITE)
+    if (vma->vm_flags & FORBIDDEN_MMAP_FLAGS) {
+    	ret = -EPERM;
+    	failure_string = "bad vm_flags";
+    	goto err_bad_arg;
+    }
+    ```
+
+    用户空间程序只能通过`ioctl`来传递数据。
+
+
+
+### 实际
+
 
 
 ## `binder_flush`
