@@ -438,3 +438,4 @@ android {
 [1] 指定CMakeLists.txt的路径。这样，NDK可自动编译Native代码并生成库文件。同时可以对Native代码提供高亮以及跳转支持。
 
 [2] 指定需要生成那几个平台的库文件。 默认情况下，cmake 会输出 4 种 ABI（"armeabi-v7a" , "arm64-v8a", "x86", "x86_64"）。根据项目需要，最小化abiFilters字段，可以缩短编译时间并且减少apk的文件大小。
+
