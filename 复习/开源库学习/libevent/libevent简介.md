@@ -167,3 +167,69 @@ int main(int argc, char *argv[]) {
 
 
 
+
+
+
+
+# libevent如何选择合适的IO复用机制
+
+首先看`event_base_new_with_config`
+
+```c++
+//循环继续的条件时，eventops[i] 不为空，并且base->evbase不为空
+for (i = 0; eventops[i] && !base->evbase; i++) {
+		if (cfg != NULL) {
+			/* determine if this backend should be avoided */
+			if (event_config_is_avoided_method(cfg,
+				eventops[i]->name))
+				continue;
+			if ((eventops[i]->features & cfg->require_features)
+			    != cfg->require_features)
+				continue;
+		}
+
+		/* also obey the environment variables */
+		if (should_check_environment &&
+		    event_is_method_disabled(eventops[i]->name))
+			continue;
+
+		base->evsel = eventops[i];
+
+		base->evbase = base->evsel->init(base);
+	}
+```
+
+`eventops`的定义如下，通过编译时期，就确认了当前平台可用的backend，并且，这些eventop是按照优先级顺序排列的，对于linux平台，编译后，就只剩下：epollops，pollops 以及 selects。按照排列顺序，第一个选择的就是epollops咯。
+
+```C++
+
+/* Array of backends in order of preference. */
+static const struct eventop *eventops[] = {
+#ifdef EVENT__HAVE_EVENT_PORTS
+	&evportops,
+#endif
+#ifdef EVENT__HAVE_WORKING_KQUEUE
+	&kqops,
+#endif
+#ifdef EVENT__HAVE_EPOLL
+	&epollops,
+#endif
+#ifdef EVENT__HAVE_DEVPOLL
+	&devpollops,
+#endif
+#ifdef EVENT__HAVE_POLL
+	&pollops,
+#endif
+#ifdef EVENT__HAVE_SELECT
+	&selectops,
+#endif
+#ifdef _WIN32
+	&win32ops,
+#endif
+	NULL
+};
+```
+
+那么问题来了，怎么指定固定的eventop呢？
+
+`event_config_is_avoided_method`似乎说明了啥。可以通过config来配置。这就不能直接调用`event_base_new`。而是参照其实现，添加avoided method。
