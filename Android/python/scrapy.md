@@ -500,6 +500,13 @@ product = Product(name='a', last_updated = 2)
 
 - deep copy
 
+    主要针对Field值为引用类型的`Item`
+
+    ```python
+    import copy
+    p1 = copy.deepcopy(p)
+    ```
+
     
 
 # 其它

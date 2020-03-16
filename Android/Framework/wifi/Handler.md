@@ -1,3 +1,11 @@
+
+
+# Handler
+
+主要包括`Handler`、`Looper`、`MessageQueue`和`Message`构成。
+
+
+
 # Looper
 
 用于在线程中创建消息循环。线程默认没有和message loop相关联,并且一个线程只能拥有一个`Looper`对象。
