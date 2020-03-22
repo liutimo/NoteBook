@@ -45,8 +45,7 @@ struct event_base {
 	/** The currently running priority of events */
 	int event_running_priority;
 
-	/** Set if we're running the event_base_loop function, to prevent
-	 * reentrant invocation. */
+	/** event_base_loop： 设置成1，避免多次调用*/
 	int running_loop;
 
 	/** Set to the number of deferred_cbs we've made 'active' in the

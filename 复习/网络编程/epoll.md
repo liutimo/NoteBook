@@ -116,7 +116,11 @@ sigprocmask(SIG_SETMASK, &origmask, NULL);
 
 # libevent中epoll的使用细节
 
+1. 对于`evconnlistener`, listen fd 是采用`EV_READ|EV_PERSIST`。
 
+   >  原因应该是，当两个connection一起到来时，如果使用ET模式，可能会导致第二个conntion可能无法被accept？？？
+
+2. 
 
 
 
