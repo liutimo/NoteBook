@@ -4,6 +4,25 @@
 
 主要包括`Handler`、`Looper`、`MessageQueue`和`Message`构成。
 
+```java
+ public void dispatchMessage(Message msg) {
+        if (msg.callback != null) {
+            handleCallback(msg);
+        } else {
+            if (mCallback != null) {
+                if (mCallback.handleMessage(msg)) {
+                    return;
+                }
+            }
+            handleMessage(msg);
+        }
+    }
+```
+
+由这段代码可以看出，消息处理器的优先级。 message.cb > mCallback > child.handleMessage.
+
+`dispatchMessage`在`Looper.loop`中被调用。
+
 
 
 # Looper
@@ -153,6 +172,38 @@ Message next() {
 
 
 
+对于`Handler`和`Looper`的通常用法是，在主线程中使用创建`Handler`，在子线程中使用`handler`发送消息，由主线程处理该消息。
+
+但是，当反过来的时候呢。
+
+```java
+class ChildThread extend Thread {
+    public Looper myLooper = null;
+    
+    @override
+    public void run() {
+        Looper.prepare();
+        myLooper = Looper.myLooper();
+        Looper.loop();
+    }
+}
+
+//main thread
+{
+    ChildThread ct = new ChildThread;
+    ct.start();		
+    
+    Looper looper = ct.myLooper; //
+    
+    Handler handler = new Handler(looper);
+    handler.sendMessage(...);
+}
+```
+
+上面的例子中，我们不仅需要手写Looper相关的代码，还要考虑 line17 处的同步问题(lin7 可能后于line17执行)。
+
+为此，请看HandlerThread的表演。 
+
 # HandlerThread
 
 如前面所说，使用Thread内部使用`Handler`需要调用`Looper.prepare()`和`Looper.loop()`。而`HandlerThread`则将这部分操作进行了封装。
@@ -170,7 +221,58 @@ public void run() {
     Looper.loop();
     mTid = -1;
 }
+
+public Looper getLooper() {
+	if (!isAlive()) {
+ 		return null;
+	}
+        
+	// If the thread has been started, wait until the looper has been created.
+	synchronized (this) {
+     	while (isAlive() && mLooper == null) {
+			try {
+				wait();  //等待notifyAll被调用。
+			} catch (InterruptedException e) {
+			}
+		}
+	}
+	return mLooper;
+}
 ```
 
+
+
 其实现很简单，就不多说明了。
+
+
+
+`HandlerThread`使用方式
+
+```java
+//该线程会执行 looper.loop来dispatch message 
+HandlerThread thread = new HandlerThread("BluetoothHdpHandler");
+thread.start();
+
+//获取looper
+Looper looper = thread.getLooper();
+
+//创建Handler
+HealthServiceMessageHandler mHandler = new HealthServiceMessageHandler(looper);
+
+//发送消息
+Message msg = mHandler.obtainMessage(MESSAGE_REGISTER_APPLICATION,config);
+mHandler.sendMessage(msg);
+
+//Handler定义
+private final class HealthServiceMessageHandler extends Handler {
+	private HealthServiceMessageHandler(Looper looper) {
+		super(looper);
+	}
+
+	@Override
+	public void handleMessage(Message msg) {
+		//...
+	}
+}
+```
 
