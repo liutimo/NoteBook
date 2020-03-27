@@ -145,3 +145,42 @@ struct event_base {
 
 ```
 
+
+
+## active callback
+
+```c++
+struct evcallback_list *activequeues;
+/** The length of the activequeues array */
+int nactivequeues;
+/** Number of total events active in this event_base */
+int event_count_active;
+/** Maximum number of total events active in this event_base */
+int event_count_active_max;
+```
+
+`activequeues`对应的是一个 active ev_cb的队列数组，根据优先级将active ev_cb放置到相应的队列中。
+
+```c++
+static void
+event_queue_insert_active(struct event_base *base, struct event_callback *evcb)
+{
+    //...
+	EVUTIL_ASSERT(evcb->evcb_pri < base->nactivequeues);
+	TAILQ_INSERT_TAIL(&base->activequeues[evcb->evcb_pri],
+	    evcb, evcb_active_next);
+}
+```
+
+`evcb_pri`值越小，对应的优先级最大。但是实际上，event_base初始化时，只有一个优先级。
+
+```c++
+//init evcb active queue
+base->nactivequeues = npriorities;
+for (i = 0; i < base->nactivequeues; ++i) {
+	TAILQ_INIT(&base->activequeues[i]);
+}
+```
+
+
+
