@@ -314,7 +314,7 @@ void ActionManager::QueueEventTrigger(const std::string& trigger) {
 }
 ```
 
-### QueueBuiltinAction]
+### QueueBuiltinAction
 
 根据代码创建一个`Action`对象，而不是解析init.rc。主要这里`oneshot`标志为true。
 
@@ -337,3 +337,77 @@ void ActionManager::QueueBuiltinAction(BuiltinFunction func, const std::string& 
 
 ### ExecuteOneCommand
 
+该函数在`init.cpp`中被调用。每次`epoll_wait`结束后，执行一次。
+
+```c++
+	while (true) {
+        int epoll_timeout_ms = -1;
+        if (!(waiting_for_prop || sm.IsWaitingForExec())) {
+            //执行咯
+            am.ExecuteOneCommand();
+        }
+        if (!(waiting_for_prop || sm.IsWaitingForExec())) {
+           
+            if (process_needs_restart_at != 0) {
+                epoll_timeout_ms = (process_needs_restart_at - time(nullptr)) * 1000;
+                if (epoll_timeout_ms < 0) epoll_timeout_ms = 0;
+            }
+			//ActionManager中还有没有执行完的Command
+            if (am.HasMoreCommands()) epoll_timeout_ms = 0;
+        }
+
+        epoll_event ev;
+        int nr = TEMP_FAILURE_RETRY(epoll_wait(epoll_fd, &ev, 1, epoll_timeout_ms));
+        ...
+    }
+```
+
+其实现如下。
+
+```c++
+void ActionManager::ExecuteOneCommand() {
+    // std::queue<const Action*> current_executing_actions_; 一个临时队列。
+    // std::vector<std::unique_ptr<Action>> actions_; Action的所有command执行完成后移除
+   	// std::queue<std::variant<EventTrigger, PropertyChange, BuiltinAction>> event_queue_;
+    //应该是一个triggername 的队列，按照先进先出的顺序执行相应的trigger。所以先加入event_queue_.front()对象的action的执行优先级是比较高的。
+    
+    //如果current_executing_actions_为空，并且event_queue_不为空，表示当前有action未被处理，
+    //将其移入 current_executing_actions_ 
+    while (current_executing_actions_.empty() && !event_queue_.empty()) {
+        for (const auto& action : actions_) {
+            if (std::visit([&action](const auto& event) { return action->CheckEvent(event); },
+                           event_queue_.front())) {
+                current_executing_actions_.emplace(action.get());
+            }
+        }
+        event_queue_.pop();
+    }
+
+    if (current_executing_actions_.empty()) {
+        return;
+    }
+
+    auto action = current_executing_actions_.front();
+
+    if (current_command_ == 0) {
+        std::string trigger_name = action->BuildTriggersString();
+        LOG(INFO) << "processing action (" << trigger_name << ") from (" << action->filename()
+                  << ":" << action->line() << ")";
+    }
+
+    action->ExecuteOneCommand(current_command_);
+
+    ++current_command_;
+    //当前action的所有command执行完毕，
+    if (current_command_ == action->NumCommands()) {
+        current_executing_actions_.pop();  //delete
+        current_command_ = 0; 
+        if (action->oneshot()) { //action 有 oneshot标志，移除。
+            auto eraser = [&action] (std::unique_ptr<Action>& a) {
+                return a.get() == action;
+            };
+            actions_.erase(std::remove_if(actions_.begin(), actions_.end(), eraser));
+        }
+    }
+}
+```
