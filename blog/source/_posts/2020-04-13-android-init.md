@@ -111,7 +111,7 @@ void Parser::ParseData(const std::string& filename, const std::string& data) {
                 section_parser->EndSection();
             }
             return;
-        //一行结束，处理改行
+        //一行结束，处理该行
         case T_NEWLINE:
             state.line++;
             if (args.empty()) {
@@ -169,6 +169,8 @@ on boot                        	  #Action
 ```
 
 首先调用`section_parser->ParseSection`机械`on boot`。然后调用`section_parser->ParseLineSection`解析剩余的行。
+
+代码中，通过判断`args`中是否包含`service`、`on`和`import`来判断是否进入一个新的`Section`。
 
 回到init.cpp中的相关代码，在解析前，我们看到了三个`SectionParser`,分别对应:
 
