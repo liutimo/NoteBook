@@ -11,14 +11,6 @@ tags:
 
 
 
-
-
-
-
-
-
-
-
 ## 属性系统初始化
 
 init进程首先调用`property_init`，随后调用`start_property_service`。这应该就是inti为属性系统初始化做的全部工作了。
@@ -344,13 +336,13 @@ static prop_area* map_prop_area_rw(const char* filename, const char* context,
                  +-----+   +-----+     +-----+            +===========+
 ```
 
-实际代码，用`prop_bt`来表示一个节点。
+实际代码，用`prop_bt`来表示一个节点。用`prop_info`来表示一个属性的具体信息。
 
 ```c++
 // Represents a node in the trie.
 struct prop_bt {
   uint32_t namelen; loads from the
-  atomic_uint_least32_t prop;
+  atomic_uint_least32_t prop; //表示的就是prop_info的偏移地址，基准地址就是 prop_area->data_
 
   atomic_uint_least32_t left;
   atomic_uint_least32_t right;
@@ -366,57 +358,262 @@ struct prop_bt {
   }
 };
 
+struct prop_info {
+  atomic_uint_least32_t serial;
+  char value[PROP_VALUE_MAX];
+  char name[0];
+};
+
 ```
 
 由属性构成的树，只会由init进程更新，其他线程只会同时读，为了避免竞态，所以使用了`atomic`。
 
+根据那个内存结构图，大致可以了解到如何找到一个节点。首先，从根节点开始，如果匹配，就找其子节点，否则就找其兄弟节点。知道找到我们需要的节点为止，没有找到就返回`nullptr`咯。
 
+```c++
+const prop_info* prop_area::find_property(prop_bt* const trie, const char* name, uint32_t namelen,
+                                          const char* value, uint32_t valuelen,
+                                          bool alloc_if_needed) {
+  if (!trie) return nullptr;
+
+  const char* remaining_name = name;
+  prop_bt* current = trie;
+  while (true) {
+    const char* sep = strchr(remaining_name, '.');
+    const bool want_subtree = (sep != nullptr);
+    const uint32_t substr_size = (want_subtree) ? sep - remaining_name : strlen(remaining_name);
+
+    if (!substr_size) {
+      return nullptr;
+    }
+
+    prop_bt* root = nullptr;
+    uint_least32_t children_offset = atomic_load_explicit(&current->children, memory_order_relaxed);
+    if (children_offset != 0) {
+      root = to_prop_bt(&current->children);
+    } else if (alloc_if_needed) {
+      uint_least32_t new_offset;
+      root = new_prop_bt(remaining_name, substr_size, &new_offset);
+      if (root) {
+        atomic_store_explicit(&current->children, new_offset, memory_order_release);
+      }
+    }
+
+    if (!root) {
+      return nullptr;
+    }
+	//注意这个函数的参数，其通过substr_size来确定当前比对范围
+      
+    //从root节点开始，逐一查找其兄弟节点，直到找到 prefix想同的节点，返回
+    current = find_prop_bt(root, remaining_name, substr_size, alloc_if_needed);
+    if (!current) {
+      return nullptr;
+    }
+
+    if (!want_subtree) break;
+	//切换prefix
+    remaining_name = sep + 1;
+  }
+	 
+  uint_least32_t prop_offset = atomic_load_explicit(&current->prop, memory_order_relaxed);
+  if (prop_offset != 0) {
+    //找到了这个节点
+    return to_prop_info(&current->prop);
+  } else if (alloc_if_needed) {
+    //节点不存在，就将其加入到树中，并返回
+    uint_least32_t new_offset;
+    prop_info* new_info = new_prop_info(name, namelen, value, valuelen, &new_offset);
+    if (new_info) {
+      atomic_store_explicit(&current->prop, new_offset, memory_order_release);
+    }
+
+    return new_info;
+  } else {
+    return nullptr;
+  }
+}
+```
+
+
+
+so，属性的添加和查找都是通过`find_property`来完成，其依照属性约定好的存储顺序，在内存中查找或添加属性。
 
 
 
 ## 属性服务的启动
 
+在init进程中，通过调用`start_property_service`启动属性服务。
+
+前面那个初始化初始化的什么内容先放一边，先来看看属性服务启动后做了什么。
+
+```c++
+// #system/core/init/property_service.cpp
+void start_property_service() {
+    property_set("ro.property_service.version", "2");
+	//创建一个uds
+    property_set_fd = CreateSocket(PROP_SERVICE_NAME, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK,
+                                   false, 0666, 0, 0, nullptr, sehandle);
+	//监听并注册handler
+    listen(property_set_fd, 8);
+    register_epoll_handler(property_set_fd, handle_property_set_fd);
+}
+```
+
+额额，似乎就这些东西？ 创建socket并加入到init进程的事件循环中？
+
+看看`handle_property_set_fd`都干了啥？
+
+```c++
+static void handle_property_set_fd() {
+    static constexpr uint32_t kDefaultSocketTimeout = 2000; /* ms */
+    int s = accept4(property_set_fd, nullptr, nullptr, SOCK_CLOEXEC);
+
+    struct ucred cr;
+    socklen_t cr_size = sizeof(cr);
+    getsockopt(s, SOL_SOCKET, SO_PEERCRED, &cr, &cr_size);
+
+    SocketConnection socket(s, cr);
+    uint32_t timeout_ms = kDefaultSocketTimeout;
+
+    uint32_t cmd = 0;
+    socket.RecvUint32(&cmd, &timeout_ms;
+    switch (cmd) {
+    case PROP_MSG_SETPROP: {
+        char prop_name[PROP_NAME_MAX];
+        char prop_value[PROP_VALUE_MAX];
+        socket.RecvChars(prop_name, PROP_NAME_MAX, &timeout_ms);
+        socket.RecvChars(prop_value, PROP_VALUE_MAX, &timeout_ms);
+        prop_name[PROP_NAME_MAX-1] = 0;
+        prop_value[PROP_VALUE_MAX-1] = 0;
+        handle_property_set(socket, prop_value, prop_value, true);
+        break;
+      }
+
+    case PROP_MSG_SETPROP2: {
+        std::string name;
+        std::string value;
+        socket.RecvString(&name, &timeout_ms);
+        socket.RecvString(&value, &timeout_ms);
+        handle_property_set(socket, name, value, false);
+        break;
+      }
+    }
+}
+
+```
+
+
+
+看到这里，大概知道这个属性服务是干嘛用的呢，我们之前在action中，有一些关于属性值更改的trigger。这个应该就是用来处理这些东西的。其核心函数就是`handle_property_set`。
+
+```c++
+static void handle_property_set(SocketConnection& socket,
+                                const std::string& name,
+                                const std::string& value,
+                                bool legacy_protocol) {
+  struct ucred cr = socket.cred();
+  char* source_ctx = nullptr;
+  getpeercon(socket.socket(), &source_ctx);
+
+  if (android::base::StartsWith(name, "ctl.")) {
+    if (check_control_mac_perms(value.c_str(), source_ctx, &cr)) {
+      handle_control_message(name.c_str() + 4, value.c_str());
+      if (!legacy_protocol) {
+        socket.SendUint32(PROP_SUCCESS);
+      }
+    }
+  } else {
+    if (check_mac_perms(name, source_ctx, &cr)) {
+      uint32_t result = property_set(name, value);
+      if (!legacy_protocol) {
+        socket.SendUint32(result);
+      }
+    }
+  }
+  freecon(source_ctx);
+}
+
+```
+
+这里`ctl.`属性用于开头的属性用于控制相关的service。
+
+```c++
+// # system/core/init/init.cpp
+void handle_control_message(const std::string& msg, const std::string& name) {
+    Service* svc = ServiceManager::GetInstance().FindServiceByName(name);
+    if (msg == "start") {
+        svc->Start();
+    } else if (msg == "stop") {
+        svc->Stop();
+    } else if (msg == "restart") {
+        svc->Restart();
+    }
+}
+
+```
+
+通过`property_set`来完成属性的设置操作，可以猜测，其，应该就是通过操作属性文件映射的内存来完成的，核心代码如下。
+
+```c++
+ prop_info* pi = (prop_info*) __system_property_find(name.c_str());
+ if (pi) {
+       __system_property_update(pi, value.c_str(), valuelen);
+ } else {
+     __system_property_add(name.c_str(), name.size(), value.c_str(), valuelen);
+}
+
+// Don't write properties to disk until after we have read all default
+// properties to prevent them from being overwritten by default values.
+if (persistent_properties_loaded && android::base::StartsWith(name, "persist.")) {
+	write_persistent_property(name.c_str(), value.c_str());
+}
+property_changed(name, value);
+```
+
+这里，通过调用`property_changed`来触发相应的action。
+
+```c++
+void property_changed(const std::string& name, const std::string& value) {
+    if (property_triggers_enabled)
+        ActionManager::GetInstance().QueuePropertyTrigger(name, value);
+}
+```
+
+
+
+
+
+
+
 
 
 ## 其他进程如何获取属性信息
 
+在编写native程序时，可以通过引用`libcutils`库来使用属性。有了前面的知识，我们也可以大概知道是如何实现的，还是直接怼代码。
 
+```c++
+// # system/core/libcutils/properties.cpp
+int property_set(const char *key, const char *value) {
+    return __system_property_set(key, value);
+}
 
+int property_get(const char *key, char *value, const char *default_value) {
+    int len = __system_property_get(key, value);
+    if (len > 0) {
+        return len;
+    }
+    if (default_value) {
+        len = strnlen(default_value, PROPERTY_VALUE_MAX - 1);
+        memcpy(value, default_value, len);
+        value[len] = '\0';
+    }
+    return len;
+}
+```
 
+最终还是调用到了bionic中的libc库中实现。但是这些实现中并没有完成之前介绍的关于`mmap`等操作，那么其他进程如何使用属性系统的呢。
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-似乎有点牛皮的，进程在使用libc库的时候，就会完成属性相应的内存映射。
+这里就涉及到编译器相关的知识了，我也不懂，大概就是进程在使用libc库的时候，就会完成属性相应的内存映射。
 
 ```c++
 //It is called from arch-$ARCH/bionic/crtbegin_static.S which is directly invoked by the kernel when the program is launched.
@@ -435,99 +632,83 @@ void __libc_init_common(KernelArgumentBlock& args) {
 }
 ```
 
-直言看不懂看不懂啊，反正，根据注释来看就是`__libc_init`会在程序启动的时候被内核直接调用，所以程序启动时就已经完成了属性的初始化操作了。重点就是看看Android如何完成属性的初始化吧。
+通过调用`__system_properties_init`，完成了和`property_init`一致的操作。根据注释来看就是`__libc_init`会在程序启动的时候被内核直接调用，所以程序启动时就已经完成了属性的初始化操作了。重点就是看看Android如何完成属性的初始化吧。
 
-## Properity Init
+### 获取属性
 
 ```c++
-int __system_properties_init() {
-  // This is called from __libc_init_common, and should leave errno at 0 (http://b/37248982).
-  ErrnoRestorer errno_restorer;
+//# system/core/libcutils/properties.cpp
+int property_get(const char *key, char *value, const char *default_value) {
+    int len = __system_property_get(key, value);
+    return len;
+}
 
-  if (initialized) {
-    list_foreach(contexts, [](context_node* l) { l->reset_access(); });
+//# bionic/libc/bionic/system_properties.cpp
+int __system_property_get(const char* name, char* value) {
+    const prop_info* pi = __system_property_find(name);
+    return __system_property_read(pi, nullptr, value);
+}
+
+int __system_property_read(const prop_info* pi, char* name, char* value) {
+  while (true) {
+      uint32_t serial = __system_property_serial(pi);  // acquire semantics
+      size_t len = SERIAL_VALUE_LEN(serial);
+      memcpy(value, pi->value, len + 1);
+      return len;
+    }
+  }
+}
+```
+
+看，直接通过访问之前`mmap`好的内存来获取属性值。
+
+### 设置属性
+
+```C++
+//# system/core/libcutils/properties.cpp
+int property_set(const char *key, const char *value) {
+    return __system_property_set(key, value);
+}
+//# bionic/libc/bionic/system_properties.cpp
+int __system_property_set(const char* key, const char* value) {
+  if (g_propservice_protocol_version == kProtocolVersion1) {
+    // Old protocol does not support long names
+    if (strlen(key) >= PROP_NAME_MAX) return -1;
+
+    prop_msg msg;
+    memset(&msg, 0, sizeof msg);
+    msg.cmd = PROP_MSG_SETPROP;
+    strlcpy(msg.name, key, sizeof msg.name);
+    strlcpy(msg.value, value, sizeof msg.value);
+
+    return send_prop_msg(&msg);
+  } else {
+    // Use proper protocol
+    PropertyServiceConnection connection;
+
+    SocketWriter writer(&connection);
+    if (!writer.WriteUint32(PROP_MSG_SETPROP2).WriteString(key).WriteString(value).Send()) {
+      errno = connection.GetLastError();
+      return -1;
+    }
+
+    int result = -1;
+    if (!connection.RecvInt32(&result)) {
+      errno = connection.GetLastError();
+      return -1;
+    }
+
+    if (result != PROP_SUCCESS) {
+      return -1;
+    }
+
     return 0;
   }
-  
-  if (is_dir(property_filename)) {
-    if (!initialize_properties()) {
-      return -1;
-    }
-    if (!map_system_property_area(false, nullptr)) {
-      free_and_unmap_contexts();
-      return -1;
-    }
-  } else {
-    //prop_area* __system_property_area__ = nullptr;
-    __system_property_area__ = map_prop_area(property_filename);
-    if (!__system_property_area__) {
-      return -1;
-    }
-    list_add(&contexts, "legacy_system_prop_area", __system_property_area__);
-    list_add_after_len(&prefixes, "*", contexts);
-  }
-  initialized = true;
-  return 0;
-}
-```
-
-我手上的AndroidO源码，`property_filename == /dev/__properties__`，是个文件夹。那就进入到`map_prop_area`咯。
-
-根据名称，我们猜测其实打开`/dev/__properties__`节点，并完成`mmap`操作。
-
-```c++
-
-```
-
-你看[1] 处的代码，直接将映射的内存地址转成了`prop_area*`，那应该就是在某个地方将`prop_area`写入到了这个文件中?
-
-
-
-## 属性是如何保存在内存中的
-
-
-
-### `/dev/__properties__`中的数据从哪来的
-
-仔细想想，系统中的大部分属性应该都是从如下属性文件中加载的。
-
-```shell
-/system/build.prop
-/odm/build.prop
-/vendor/build.prop
-/factory/factory.prop
-```
-
-那么系统时如何加载这些文件的呢？也不买关子了，答案就是通过`Action`。
-
-
-
-
-
-
-
-
-
-
-
-在init进程中，首先调用`property_init`完成属性的初始化，随后在调用`start_property_service`启动属性服务。
-
-前面那个初始化初始化的什么内容先放一边，先来看看属性服务启动后做了什么。
-
-```c++
-void start_property_service() {
-    property_set("ro.property_service.version", "2");
-	//创建一个uds
-    property_set_fd = CreateSocket(PROP_SERVICE_NAME, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK,
-                                   false, 0666, 0, 0, nullptr, sehandle);
-	//监听并注册handler
-    listen(property_set_fd, 8);
-    register_epoll_handler(property_set_fd, handle_property_set_fd);
 }
 
 ```
 
-
+进程设置属性时，通过uds连接到属性服务。由属性服务来完成实际的设置操作。了解UDS的，应该知道`PropertyServiceConnection`的大概实现了，就不贴代码了。
 
 
 
@@ -537,11 +718,9 @@ void start_property_service() {
 
     通过属性名的`prefix`找到与`context`关联的`prop_area`。所有`prefix`一致的属性都会保存到这个`prop_area`中。
 
-    
+2. persist相关的属性是保存在`/data/`目录下的，系统启动时，`data`分区挂载时，通过`Vold`触发action去加载这些属性。
 
-
-
-
+3. 属性服务的作用就是创建一个socket用于监听其他进程的连接，其他进程通过连接属性服务来设置属性，通过访问属性文件来获取属性。我们设置的属性变更的action就是通过属性服务来完成触发的。
 
 
 
