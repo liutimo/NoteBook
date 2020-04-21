@@ -161,7 +161,9 @@ void DescriptorInfo::CreateAndPublish(const std::string& globalContext) const {
   int fd = Create(contextStr);
   if (fd < 0) return;
 
-  // Publish
+  // #libcutils/include_vndk/cutils/sockets.h:45
+  // #define ANDROID_SOCKET_ENV_PREFIX	"ANDROID_SOCKET_"
+  // Publish   key() == ANDROID_SOCKET_   
   std::string publishedName = key() + name_;
   std::for_each(publishedName.begin(), publishedName.end(),
                 [] (char& c) { c = isalnum(c) ? c : '_'; });
@@ -175,7 +177,7 @@ void DescriptorInfo::CreateAndPublish(const std::string& globalContext) const {
 }
 ```
 
-[1] 处的代码将fd保存到环境变量里去了。[2]处的代码使得fd在exec执行时不会被`close`，这样在执行`exec`后的子进程，通过环境变量仍然能拿到这个fd并操作他。
+[1] 处的代码将fd保存到环境变量里去了。[2]处的代码使得fd在exec执行时不会被`close`，这样在执行`exec`后的子进程，通过环境变量(`ANDROID_SOCKET_ + SOCKETNAME`)仍然能拿到这个fd并操作他。
 
 以adbd为例：
 
@@ -585,3 +587,74 @@ void Service::RestartIfNeeded(time_t* process_needs_restart_at) {
 如果想知道如何对多进程进行管理，可以看看service的全部代码，也不多，千把行。看完以后，需要重新学习一下进程，进程组的知识了，全忘了。
 
 笔记很杂，很乱，过段时间就忘了。。。。没事回头再看看，再修改。
+
+
+
+## 附录
+
+### Java如何使用init进程创建的socket
+
+`fork`之后创建完`socket`，随后，就相应的`fd`以`ANDROID_SOCKET_SOCKNAME=fd`的形式添加到了环境变量中。
+
+```c++
+// #system/core/init/service.cpp
+int pid = fork();
+if (pid == 0) {
+    std::for_each(descriptors_.begin(), descriptors_.end(),
+                      std::bind(&DescriptorInfo::CreateAndPublish, std::placeholders::_1, scon));
+}
+
+// #system/core/init/descriptors.cpp
+void DescriptorInfo::CreateAndPublish(const std::string& globalContext) const {
+  // Create
+  const std::string& contextStr = context_.empty() ? globalContext : context_;
+  int fd = Create(contextStr);
+  if (fd < 0) return;
+
+  // Publish
+  std::string publishedName = key() + name_;
+  std::for_each(publishedName.begin(), publishedName.end(),
+                [] (char& c) { c = isalnum(c) ? c : '_'; });
+
+  std::string val = std::to_string(fd);
+  //添加到环境变量中。
+  add_environment(publishedName.c_str(), val.c_str());
+
+  // make sure we don't close on exec
+  fcntl(fd, F_SETFD, 0);
+}
+```
+
+以`Zygote`为例：
+
+```java
+public static void main(String argv[]) {
+    ZygoteServer zygoteServer = new ZygoteServer();
+	String socketName = "zygote";
+    zygoteServer.registerServerSocket(socketName);
+}
+
+void registerServerSocket(String socketName) {
+    if (mServerSocket == null) {
+        int fileDesc;
+        final String fullSocketName = ANDROID_SOCKET_PREFIX + socketName;
+        try {
+            //从环境变量中拿到env
+            String env = System.getenv(fullSocketName);
+            fileDesc = Integer.parseInt(env);
+        } catch (RuntimeException ex) {
+            throw new RuntimeException(fullSocketName + " unset or invalid", ex);
+         }
+
+        try {
+            FileDescriptor fd = new FileDescriptor();
+            fd.setInt$(fileDesc);
+            mServerSocket = new LocalServerSocket(fd);
+        } catch (IOException ex) {
+            throw new RuntimeException(
+                    "Error binding to local socket '" + fileDesc + "'", ex);
+        }
+    }
+}
+```
+
