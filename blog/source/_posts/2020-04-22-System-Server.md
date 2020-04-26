@@ -9,12 +9,6 @@ tags:
 
 ## SystemServer的启动
 
-
-
-
-
-
-
 `Zygote`启动后，会根据init.rc中的`--start-system-server`来启动SystemServer进程。
 
 
@@ -576,8 +570,12 @@ createSystemContext();
 
 ## 附录
 
-我只是简单的走了一遍代码流程很多细节，目前的能力还不足以看懂。附录是大神网友的博客地址。
+我只是简单的走了一遍代码流程，还有很多细节，目前的能力还不足以看懂。附录是大神网友的博客地址。
 
 1. [SystemServer 上](http://gityuan.com/2016/02/14/android-system-server/)
-2. [SytstemServer 下](http://gityuan.com/2016/02/20/android-system-server-2/)
+2. [SytstemServer 下
+
+
+
+## SystemServer的作用
 
