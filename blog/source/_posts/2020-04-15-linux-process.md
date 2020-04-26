@@ -6,6 +6,77 @@ tags:
     - 进程
 ---
 
+
+
+## uid、effective-uid 及 set-uid
+
+`uid`通常表示创建进程的用户
+
+`euid`通常表示进程对于文件或资源的访问权限。
+
+同理，`gid`表示创建进程的用户所在的用户组。`egid`表示当前进程对文件或资源的访问权限同`egid`对应的进程组是一样的。
+
+```c++
+auto uid    = getuid();
+auto euid   = geteuid();
+auto gid    = getgid();
+auto egid   = getegid();
+```
+
+普通用户执行结果:
+
+```shell
+ uid:1000
+euid:1000
+ gid:1000
+egid:1000
+```
+
+root用户执行结果
+
+```shell
+ uid:0
+euid:0
+ gid:0
+egid:0
+```
+
+
+
+设置set-user-id 及 set-group-id
+
+```shell
+chmod u+s Uid 
+chmod g+s Uid
+```
+
+root用户执行
+
+```shell
+ uid:0
+euid:1000
+ gid:0
+egid:1000
+```
+
+root用户执行时，euid和egid都是1000。说明，执行程序在设置set-id位后，其他用户运行时，会拥有执行程序所属用户及用户组相应的权限。
+
+实例
+
+```shell
+-rwsrwxr-x  1 root root 32736 Apr 25 21:36 Uid
+-r--r-----  1 root root     0 Apr 25 21:35 1.txt
+```
+
+普通用户通过程序`Uid`打开文件`1.txt`。因为`Uid`设置了`set-user-id`位，所以能够打开`1.txt`
+
+> 当我们以写权限打开1.txt时，如果Uid设置了set-user-id位，我们还是能够写入数据的1.txt。
+>
+> 有些文件设置了只读，一般是不是修改文件的，但是如果你是文件的owner或者root的话，通过wq!还是能保存文件退出。所以，open系统调用内部，这些规则应该是open函数内部定下的。
+
+
+
+
 ## wait族函数
 
 ```C++
@@ -164,4 +235,10 @@ waitid比其他wait函数提供更细度的控制
     # define si_arch	_sifields._sigsys._arch
     ```
 
-    
+
+## 进程组
+
+```c++
+
+```
+
