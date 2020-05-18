@@ -126,7 +126,7 @@ mHandler.sendMessae(msg);
 
 `Handler`中提供的发送消息的函数大概有如下几个：
 
-![image-20200517215939457](images/image-20200517215939457.png)
+![image-20200517215939457](2020-05-Android-MessageQueue/image-20200517215939457.png)
 
 这几个函数最终都是调用的`enqueueMessage`，进而调用到`MessageQueue.enqueueMessage()`
 
@@ -294,29 +294,31 @@ Message next() {
                 }
             }
         }
-        // Reset the idle handler count to 0 so we do not run them again.
         pendingIdleHandlerCount = 0;
-        // While calling an idle handler, a new message could have been delivered
-        // so go back and look again for a pending message without waiting.
         nextPollTimeoutMillis = 0;
     }
 }
 ```
 
+`next`函数的处理逻辑就是：
 
-
-
+1. `MessageQueue`中有可用`Message`就返回`msg.when <= now`的那个`Message`。
+2. `MessageQueue`中无可用`Message`，进入`loop`，并执行相应的`IDLE Handler`。
 
 
 
 ## Native 层实现
 
+底层实现就是基于`epoll`来完成的。主要内容和`Looper.loop`类似，这里就不做多的分析了。
 
-
-
+主要代码都在`system/core/libutils/Looper.cpp`中。
 
 
 
 ## 总结
 
 1. MessageQueue中，`nativeWake`的什么时候会被调用?
+
+    插入新的消息时。
+
+2. 异步消息和同步屏障是什么？
