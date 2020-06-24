@@ -11,7 +11,7 @@ private:
     static NetlinkManager* sInstace;
 
 private:
-    SocketListener *mBoradcaster;
+//    SocketListener *mBoradcaster;
 };
 
 
