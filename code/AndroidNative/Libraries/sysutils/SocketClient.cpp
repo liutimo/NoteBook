@@ -9,6 +9,42 @@
 #include <netinet/in.h>
 #include "SocketClient.h"
 
+SocketClient::SocketClient(int socket, bool owned) {
+    init(socket, owned, false);
+}
+
+SocketClient::SocketClient(int socket, bool owned, bool useCmdNum) {
+    init(socket, owned, useCmdNum);
+}
+
+void SocketClient::init(int socket, bool owned, bool useCmdNum) {
+    mSocket = socket;
+    mSocketOwned = owned;
+    mUseCmdNum = useCmdNum;
+    mPid = -1;
+    mUid = -1;
+    mGid = -1;
+    mRefCount = 1;
+    mCmdNum = 0;
+
+    struct ucred creds;
+    socklen_t szCreds = sizeof(creds);
+    memset(&creds, 0, szCreds);
+
+    int err = getsockopt(socket, SOL_SOCKET, SO_PEERCRED, &creds, &szCreds);
+    if (err == 0) {
+        mPid = creds.pid;
+        mUid = creds.uid;
+        mGid = creds.gid;
+    }
+}
+
+SocketClient::~SocketClient() {
+    if (mSocketOwned) {
+        close(mSocket);
+    }
+}
+
 int SocketClient::sendMsg(int code, const char *msg, bool addErrno) {
     return sendMsg(code, msg, addErrno, mUseCmdNum);
 }
