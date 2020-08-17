@@ -36,6 +36,7 @@ public:
 
 private:
     NetlinkManager();
+//    SocketListener *mBoradcaster;
 };
 
 
