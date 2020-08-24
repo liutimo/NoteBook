@@ -724,9 +724,166 @@ protected:
 
 ## BnInterface
 
+`BnInterface`用于对外提供服务。
+
+```c++
+template<typename INTERFACE>
+class BnInterface : public INTERFACE, public BBinder
+{
+public:
+    virtual sp<IInterface>      queryLocalInterface(const String16& _descriptor);
+    virtual const String16&     getInterfaceDescriptor() const;
+
+protected:
+    virtual IBinder*            onAsBinder();
+};
+```
+
+额，这些接口我们在使用的时候都不太会去重定义，使用`BnInterface`做父类时，我们只需要实现`BBinder::onTransact`方法，实现数据处理的逻辑即可。实际上具体的业务逻辑是在其子类中重写`INTERFACE`的虚函数实现的。
 
 
 
 
 
 
+
+
+
+## 从ServiceManager中获取的service是如何转换成BpBinder对象的
+
+1. `defaultServiceManager()->getService(String16(serviceName))`
+
+   `getService`实际上就是调用的`checkService`，只是多了多了几次retry
+
+   ```c++
+   virtual sp<IBinder> checkService(const String16 &name) const
+   {
+       Parcel data, reply;
+       data.writeInterfaceToken(IServiceManager::getInterfaceDescriptor());
+       data.writeString16(name);
+       remote()->transact(CHECK_SERVICE_TRANSACTION, data, &reply);
+    	//额，这样就拿到了`BpBinder`了。
+       return reply.readStrongBinder();
+   }
+   ```
+   
+   `reply.readStrongBinder();`就拿到了`BpBinder`对象？？？？
+   
+   ```c++
+   sp<IBinder> Parcel::readStrongBinder() const
+   {
+       sp<IBinder> val;
+       // Note that a lot of code in Android reads binders by hand with this
+       // method, and that code has historically been ok with getting nullptr
+       // back (while ignoring error codes).
+       readNullableStrongBinder(&val);
+       return val;
+   }
+   
+   status_t Parcel::readNullableStrongBinder(sp<IBinder>* val) const
+   {
+       return unflatten_binder(ProcessState::self(), *this, val);
+   }
+   
+   status_t unflatten_binder(const sp<ProcessState>& proc,
+       const Parcel& in, sp<IBinder>* out)
+   {
+       const flat_binder_object* flat = in.readObject(false);
+   
+       if (flat) {
+           switch (flat->type) {
+               case BINDER_TYPE_BINDER:
+                   *out = reinterpret_cast<IBinder*>(flat->cookie);
+                   return finish_unflatten_binder(NULL, *flat, in);
+               case BINDER_TYPE_HANDLE:
+                   *out = proc->getStrongProxyForHandle(flat->handle);
+                   return finish_unflatten_binder(
+                       static_cast<BpBinder*>(out->get()), *flat, in);
+           }
+       }
+       return BAD_TYPE;
+   }
+   ```
+   
+   额，`BINDER_TYPE_HANDLE`表示的是一个代理对象。
+   
+   `finish_unflatten_binder`没有做任何事情，所以，实际上，核心工作就是由`ProcessState::getStrongProxyForHandle()`来完成的。
+   
+   ```c++
+   
+   sp<IBinder> ProcessState::getStrongProxyForHandle(int32_t handle)
+   {
+       sp<IBinder> result;
+   
+       AutoMutex _l(mLock);
+   	
+       handle_entry* e = lookupHandleLocked(handle);
+   
+       if (e != NULL) {
+           IBinder* b = e->binder;
+           if (b == NULL || !e->refs->attemptIncWeak(this)) {
+               if (handle == 0) {
+                   Parcel data;
+                   status_t status = IPCThreadState::self()->transact(
+                           0, IBinder::PING_TRANSACTION, data, NULL, 0);
+                   if (status == DEAD_OBJECT)
+                      return NULL;
+               }
+   
+               b = new BpBinder(handle); 
+               e->binder = b;
+               if (b) e->refs = b->getWeakRefs();
+               result = b;
+           } else {
+               // This little bit of nastyness is to allow us to add a primary
+               // reference to the remote proxy when this team doesn't have one
+               // but another team is sending the handle to us.
+               result.force_set(b);
+               e->refs->decWeak(this);
+           }
+       }
+   
+       return result;
+   }
+   ```
+   
+   上面的代码有一个很重要的概念，就是`handle`，binder驱动通过它来标志一个`BpBinder`对象与被其代理的Service。
+   
+   该函数先从对象池中查找与`handle`关联的`BpBinder`对象，找到了的话就增加其weak引用计数。否则新建一个`BpBinder`对象，并放入到对象池中。
+   
+   这里有一个特别的地方，当`handle == 0`时，表示的是`ServiceManager`的代理对象。
+   
+   ```c++
+   sp<IServiceManager> defaultServiceManager()
+   {
+       if (gDefaultServiceManager != NULL) return gDefaultServiceManager;
+   
+       {
+           AutoMutex _l(gDefaultServiceManagerLock);
+           while (gDefaultServiceManager == NULL) {
+               gDefaultServiceManager = interface_cast<IServiceManager>(
+                   ProcessState::self()->getContextObject(NULL));
+               if (gDefaultServiceManager == NULL)
+                   sleep(1);
+           }
+       }
+   
+       return gDefaultServiceManager;
+   }
+   ```
+   
+   通过`ProcessState::self()->getContextObject(NULL)`我们就能拿到一个`BpBinder`对象，在通过`IServiceManager::asInterface`将其转换成`BpInterface`实际类型是`BpServiceManager`。
+
+
+
+## 总结？？？
+
+到这里，libbinder中的大部分类和用法及原理都说的差不多多了，重要的点就几个：
+
+1. Service和Client如何继承libbinder提供的类。
+2. `BpBinder`是如何创建的。
+3. `INTERFACE::asInterface(IBinder)`的原理
+
+but,还设有一些不清楚的，`handle`从哪来的？？数据是如何接受和发送的？？
+
+这些就看Binder驱动的实现了咯。
