@@ -98,12 +98,126 @@ Android提供了4种启动模式。
 2. SingleTop
 
    栈顶复用模式。如果新的Activity已经有一个实例位于栈顶，就不在重新创建。此外，`onCreate`、`onStart`不会被调用， 但是会依次调用`onNewIntent`、`onResume`。
+   
+3. SingleTask
 
-Standard,  singleTop,  singleTask,  singleInstance
+   栈内复用模式。只要栈中有一个相同的Activity存在，就不会再创建新的实例。
+
+   如果Activity栈中，新创建的Activity有其他实例存在非栈顶，那么就不会创建新的Activity实例，而是将其他的Activity实例出栈直到Activity位于栈顶。
+
+4. SingleInstance
+
+   单实例模式。加强版SingleTask，系统会为该Activity创建单独的任务栈。
 
 
 
 ## IntentFilter
+
+Activity的启动分为隐式和显式两种。
+
+显式启动代码如下：
+
+```java
+Intent intent = new Intent(this MyActivity.class);
+startActivity(intent);
+```
+
+隐式启动代码如下：
+
+```java
+Intent intent = new Intent("com.github.liutimo.MAIN");
+startActivity(intent);
+```
+
+使用隐式启动时，我们需要在`<activity></activity>`中添加一个`<intent-filter></intent-filter>`。
+
+```xml
+<activity
+	android:name=".MainActivity">
+    <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+    </intent-filter>
+</activity>
+```
+
+
+
+**android如何匹配intent中的信息**
+
+`IntentFilter`中支持的过滤信息有`data`、`action`和`categoty`。通过`Intent`隐式启动Activity时，需要同时匹配`data`、`action`和`categoty`才能成功启动Activity（如果三个中有一个不存在，则无需匹配）。
+
+
+
+### action的匹配规则
+
+`Intent`的匹配需满足如下要求：
+
+1. 必须存在一个action
+2. 区分大小写
+3. 和`intent-filter`中的一个匹配即可。
+
+
+
+> 一个Intent 只能通过 setAction指定一个 action
+
+### category的匹配规则
+
+`Intent`的匹配需满足如下条件。
+
+1. `intent-filter`中不是必须存在`category`的
+2. 如果我们`Intent`没有指定category，会自动为`Intent`添加android.intent.category.DEFAULT`,所以`intent-filter`必须添加`android.intent.category.DEFAULT`
+3. 如果存在多个`category`，每个都要在`intent-filter`中找到匹配的。
+
+>  第二点的例外情况是，`intent-filter`中指定了：`android.intent.category.MAIN`和`android.intent.category.LAUNCHER`
+
+
+
+
+
+### data的匹配规则
+
+`data`的语法如下：
+
+```xml
+<data android:scheme="string"
+      android:host="string"
+      android:port="string"
+      android:path="string"
+      android:pathPattern="string"
+      android:pathPrefix="string"
+      android:mimeType="string" />
+```
+
+
+
+data由两部分组成， `mineType`进而 `Uri`。前置表示媒体类型，`Uri的组成如下`：
+
+`<scheme>://<host>:<port>/[<path>|<pathPrefix>|<pathPattern>]`
+
+1. scheme
+
+   其可以为`content`、`http`、`file`，但是不能不指定，否则，URI就是无效的。
+
+2. host
+  URI的主机名，同样，必须要要指定，否则URI无效
+
+3. Port
+
+  端口号。同时指定了scheme和host时有意义
+
+4. Path、pathPattern、pathPrefix
+
+   ：这三个参数表述路径信息，其中path表示完整的路径信息；pathPattern也表示完整的路径信息，但是它里面可以包含通配符“*”，“*”表示0个或多个任意字符，需要注意的是，由于正则表达式的规范，如果想表示真实的字符串，那么“*”要写成“\\*”，“\”要写成“\\\\”；pathPrefix表示路径的前缀信息。
+
+
+
+
+
+
+
+
+
 
 
 
