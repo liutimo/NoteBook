@@ -2,8 +2,9 @@
 title: libbinder
 permalink: libbinder
 date: 2020-08-17 19:56:14
-tags:
-categories:
+tags:  
+	- android binder
+categories: Android
 ---
 
 ![img](images/2020-08-libbinder/5297002-ef926e2d52fd756a.PNG)
