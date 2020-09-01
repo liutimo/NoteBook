@@ -757,6 +757,7 @@ protected:
    `getService`实际上就是调用的`checkService`，只是多了多了几次retry
 
    ```c++
+   //frameworks\native\libs\binder\IServiceManager.cpp
    virtual sp<IBinder> checkService(const String16 &name) const
    {
        Parcel data, reply;
