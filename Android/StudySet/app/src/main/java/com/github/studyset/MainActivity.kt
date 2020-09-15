@@ -5,6 +5,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentManager
 import androidx.fragment.app.FragmentStatePagerAdapter
+import com.github.studyset.bluetooth.BluetoothFragment
 import com.github.studyset.customview.CustomViewFragment
 import com.github.studyset.viewpager.ViewPagerFragment
 import com.google.android.material.tabs.TabLayout
@@ -32,15 +33,16 @@ class MainActivity : AppCompatActivity() {
     }
 
 
-
     companion object {
         val classList = listOf(
+            BluetoothFragment::class.java,
             ViewPagerFragment::class.java,
             CustomViewFragment::class.java
         )
 
 
         val titleList = listOf(
+            "蓝牙",
             "ViewPager1",
             "CustomView"
         )
